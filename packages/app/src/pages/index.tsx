@@ -113,11 +113,20 @@ export default function Page() {
 
   return (
     <div class="relative">
-      <div class="fixed top-0 w-50 h-full py-2 overflow-y-auto no-scrollbar border-r border-border-subtle/30">
+      <div
+        class="fixed top-0 w-50 h-full py-2 overflow-y-auto no-scrollbar 
+               border-r border-border-subtle/30"
+      >
         <FileTree path="/" selected={selected()} onFileClick={handleFileClick} />
       </div>
-      <div class="fixed top-0 left-px w-[198px] h-4 bg-gradient-to-t from-transparent to-background pointer-events-none" />
-      <div class="fixed bottom-0 left-px w-[198px] h-4 bg-gradient-to-b from-transparent to-background pointer-events-none" />
+      <div
+        class="fixed top-0 left-px w-[198px] h-4 pointer-events-none 
+               bg-gradient-to-t from-transparent to-background"
+      />
+      <div
+        class="fixed bottom-0 left-px w-[198px] h-4 pointer-events-none
+               bg-gradient-to-b from-transparent to-background"
+      />
       <div class="pl-50 flex">
         <DragDropProvider
           onDragStart={onDragStart}
@@ -152,7 +161,12 @@ export default function Page() {
               (() => {
                 const draggedFile = state.files.find((f) => f.path === activeItem())!
                 return (
-                  <div class="relative px-3 h-9 flex items-center text-sm font-medium text-text whitespace-nowrap shrink-0 bg-background-panel shadow-lg border-x border-border-subtle/40 border-b border-b-transparent">
+                  <div
+                    class="relative px-3 h-9 flex items-center 
+                           text-sm font-medium text-text whitespace-nowrap
+                           shrink-0 bg-background-panel shadow-lg
+                           border-x border-border-subtle/40 border-b border-b-transparent"
+                  >
                     <TabVisual file={draggedFile} />
                   </div>
                 )
