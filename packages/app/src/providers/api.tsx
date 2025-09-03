@@ -3,9 +3,12 @@ import { createOpencodeClient } from "@opencode-ai/sdk/client"
 
 export type ApiContext = ReturnType<typeof createOpencodeClient>
 
+const host = import.meta.env.VITE_OPENCODE_SERVER_HOST ?? "127.0.0.1"
+const port = import.meta.env.VITE_OPENCODE_SERVER_PORT ?? "4096"
+
 const ApiContext = createContext<ApiContext>(
   createOpencodeClient({
-    baseUrl: "http://127.0.0.1:4096",
+    baseUrl: `http://${host}:${port}`,
   }),
 )
 

@@ -88,11 +88,7 @@ export namespace Server {
         return next()
       })
     })
-    .use(
-      cors({
-        origin: ["http://localhost:3000"],
-      }),
-    )
+    .use(cors())
     .use(zValidator("query", z.object({ directory: z.string().optional() })))
     .get(
       "/doc",
