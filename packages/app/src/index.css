@@ -13,6 +13,11 @@
     line-height: 1;
   }
 
+  ::selection {
+    background-color: var(--color-primary);
+    color: var(--color-background);
+  }
+
   .prose h1 {
     color: var(--color-text);
     font-size: var(--text-sm);
