@@ -22,7 +22,6 @@
 ## Key Dependencies
 
 - SolidJS, @solidjs/router, @kobalte/core (UI primitives)
-- @tanstack/solid-query (data fetching)
 - TailwindCSS 4.x with @tailwindcss/vite
 - Custom theme system with CSS variables
 

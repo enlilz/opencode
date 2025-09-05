@@ -25,12 +25,12 @@
     "@opencode-ai/sdk": "workspace:*",
     "@shikijs/transformers": "3.9.2",
     "@solidjs/router": "0.15.3",
-    "@tanstack/solid-query": "5.83.1",
     "@thisbeyond/solid-dnd": "0.7.5",
     "diff": "8.0.2",
     "luxon": "3.7.1",
     "marked": "16.2.0",
     "marked-shiki": "1.2.1",
+    "remeda": "catalog:",
     "shiki": "3.9.2",
     "solid-js": "catalog:",
     "tailwindcss": "4.1.11"

@@ -4,10 +4,8 @@ import { Router, Route } from "@solidjs/router"
 import "@/index.css"
 import Layout from "@/pages/layout"
 import Home from "@/pages"
-import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
-import { ApiProvider, ThemeProvider } from "@/providers"
+import { SDKProvider, SyncProvider, LocalProvider, ThemeProvider } from "@/context"
 
-const queryClient = new QueryClient()
 const root = document.getElementById("root")
 
 if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
@@ -20,13 +18,15 @@ render(
   () => (
     <div class="h-full bg-background text-text-muted">
       <ThemeProvider defaultTheme="opencode" defaultDarkMode={true}>
-        <ApiProvider>
-          <QueryClientProvider client={queryClient}>
-            <Router root={Layout}>
-              <Route path="/" component={Home} />
-            </Router>
-          </QueryClientProvider>
-        </ApiProvider>
+        <SDKProvider>
+          <SyncProvider>
+            <LocalProvider>
+              <Router root={Layout}>
+                <Route path="/" component={Home} />
+              </Router>
+            </LocalProvider>
+          </SyncProvider>
+        </SDKProvider>
       </ThemeProvider>
     </div>
   ),

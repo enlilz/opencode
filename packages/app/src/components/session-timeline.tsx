@@ -1,7 +1,6 @@
-import { useApi } from "@/providers"
+import { useSync } from "@/context"
 import { Collapsible, Icon, type IconProps } from "@/ui"
 import type { Part, ToolPart } from "@opencode-ai/sdk"
-import { useQuery } from "@tanstack/solid-query"
 import { DateTime } from "luxon"
 import { createMemo, Match, Switch, type ComponentProps, type ParentProps } from "solid-js"
 import { Diff } from "./diff"
@@ -166,20 +165,14 @@ function ToolPart(props: { part: ToolPart }) {
 }
 
 export default function SessionTimeline(props: { session: string; class?: string }) {
-  const api = useApi()
+  const sync = useSync()
 
-  const session = useQuery(() => ({
-    queryKey: ["session", props.session],
-    queryFn: () => api.session.get({ path: { id: props.session! } }).then((res) => res.data),
-    enabled: !!props.session,
-  }))
-  const messages = useQuery(() => ({
-    queryKey: ["messages", props.session],
-    queryFn: () => api.session.messages({ path: { id: props.session! } }).then((res) => res.data),
-    enabled: !!props.session,
-  }))
+  const session = sync.data.session[props.session!]
+  const messages = sync.data.message[props.session!]
+  const all = Object.values(sync.data.part[props.session!]).flatMap((x) => Object.values(x))
+
   const parts = createMemo(() => {
-    if (!messages.data) return []
+    if (!messages) return []
     const valid = (part: Part) => {
       switch (part.type) {
         case "step-start":
@@ -214,12 +207,15 @@ export default function SessionTimeline(props: { session: string; class?: string
       }
     }
 
-    return messages.data.flatMap((message) =>
-      message.parts.filter(valid).map((p) => ({
-        ...p,
-        duration: duration(p),
-        message,
-      })),
+    return Object.values(messages).flatMap((message) =>
+      all
+        .filter((p) => p.messageID === message.id)
+        .filter(valid)
+        .map((p) => ({
+          ...p,
+          duration: duration(p),
+          message,
+        })),
     )
   })
 
@@ -230,87 +226,77 @@ export default function SessionTimeline(props: { session: string; class?: string
         [props.class ?? ""]: !!props.class,
       }}
     >
-      <h1 class="text-lg font-semibold text-text">{session.data?.title ?? "No active session"}</h1>
-      <Switch>
-        <Match when={messages.isPending}>
-          <div />
-        </Match>
-        <Match when={messages.isError}>
-          <p>Error: {messages.error?.message}</p>
-        </Match>
-        <Match when={messages.isSuccess}>
-          <ul role="list" class="space-y-3">
-            {parts().map((part, partIndex) => (
-              <li classList={{ "relative group/li flex gap-x-4 min-w-0 w-full": true }}>
-                <div
-                  classList={{
-                    "absolute top-0 left-0 flex w-6 justify-center": true,
-                    "h-10": partIndex === parts().length - 1,
-                    "-bottom-10": partIndex !== parts().length - 1,
-                  }}
-                >
-                  <div class="w-px bg-border-subtle" />
+      <h1 class="text-lg font-semibold text-text">{session.title ?? "No active session"}</h1>
+      <ul role="list" class="space-y-3">
+        {parts().map((part, partIndex) => (
+          <li classList={{ "relative group/li flex gap-x-4 min-w-0 w-full": true }}>
+            <div
+              classList={{
+                "absolute top-0 left-0 flex w-6 justify-center": true,
+                "h-10": partIndex === parts.length - 1,
+                "-bottom-10": partIndex !== parts.length - 1,
+              }}
+            >
+              <div class="w-px bg-border-subtle" />
+            </div>
+            <Switch
+              fallback={
+                <div class="m-0.5 relative flex size-5 flex-none items-center justify-center bg-background">
+                  <div class="size-1 rounded-full bg-text/10 ring ring-text/20" />
                 </div>
-                <Switch
-                  fallback={
-                    <div class="m-0.5 relative flex size-5 flex-none items-center justify-center bg-background">
-                      <div class="size-1 rounded-full bg-text/10 ring ring-text/20" />
-                    </div>
-                  }
-                >
-                  <Match when={part.type === "text"}>
-                    <Switch>
-                      <Match when={part.message.info.role === "user"}>
-                        <TimelineIcon name="avatar-square" />
-                      </Match>
-                      <Match when={part.message.info.role === "assistant"}>
-                        <TimelineIcon name="sparkles" />
-                      </Match>
-                    </Switch>
+              }
+            >
+              <Match when={part.type === "text"}>
+                <Switch>
+                  <Match when={part.message.role === "user"}>
+                    <TimelineIcon name="avatar-square" />
                   </Match>
-                  <Match when={part.type === "reasoning"}>
-                    <CollapsibleTimelineIcon name="brain" />
+                  <Match when={part.message.role === "assistant"}>
+                    <TimelineIcon name="sparkles" />
                   </Match>
-                  <Match when={part.type === "tool" && part}>{(part) => <ToolIcon part={part()} />}</Match>
                 </Switch>
-                <Switch fallback={<div class="flex-auto min-w-0 text-xs mt-1 text-left">{part.type}</div>}>
-                  <Match when={part.type === "text" && part}>
-                    {(part) => (
-                      <Switch>
-                        <Match when={part().message.info.role === "user"}>
-                          <div class="w-full flex flex-col items-end justify-stretch gap-y-1.5 min-w-0">
-                            <p class="w-full rounded-md p-3 ring-1 ring-text/15 ring-inset text-xs bg-background-panel">
-                              <span class="font-medium text-text whitespace-pre-wrap break-words">{part().text}</span>
-                            </p>
-                            <p class="text-xs text-text-muted">12:07pm · adam</p>
-                          </div>
-                        </Match>
-                        <Match when={part().message.info.role === "assistant"}>
-                          <Markdown text={part().text} class="text-text" />
-                        </Match>
-                      </Switch>
-                    )}
-                  </Match>
-                  <Match when={part.type === "reasoning" && part}>
-                    {(part) => (
-                      <CollapsiblePart
-                        title={
-                          <>
-                            <span class="text-text-muted">Thought</span> for {part().duration}s
-                          </>
-                        }
-                      >
-                        <Markdown text={part().text} />
-                      </CollapsiblePart>
-                    )}
-                  </Match>
-                  <Match when={part.type === "tool" && part}>{(part) => <ToolPart part={part()} />}</Match>
-                </Switch>
-              </li>
-            ))}
-          </ul>
-        </Match>
-      </Switch>
+              </Match>
+              <Match when={part.type === "reasoning"}>
+                <CollapsibleTimelineIcon name="brain" />
+              </Match>
+              <Match when={part.type === "tool" && part}>{(part) => <ToolIcon part={part()} />}</Match>
+            </Switch>
+            <Switch fallback={<div class="flex-auto min-w-0 text-xs mt-1 text-left">{part.type}</div>}>
+              <Match when={part.type === "text" && part}>
+                {(part) => (
+                  <Switch>
+                    <Match when={part().message.role === "user"}>
+                      <div class="w-full flex flex-col items-end justify-stretch gap-y-1.5 min-w-0">
+                        <p class="w-full rounded-md p-3 ring-1 ring-text/15 ring-inset text-xs bg-background-panel">
+                          <span class="font-medium text-text whitespace-pre-wrap break-words">{part().text}</span>
+                        </p>
+                        <p class="text-xs text-text-muted">12:07pm · adam</p>
+                      </div>
+                    </Match>
+                    <Match when={part().message.role === "assistant"}>
+                      <Markdown text={part().text} class="text-text" />
+                    </Match>
+                  </Switch>
+                )}
+              </Match>
+              <Match when={part.type === "reasoning" && part}>
+                {(part) => (
+                  <CollapsiblePart
+                    title={
+                      <>
+                        <span class="text-text-muted">Thought</span> for {part().duration}s
+                      </>
+                    }
+                  >
+                    <Markdown text={part().text} />
+                  </CollapsiblePart>
+                )}
+              </Match>
+              <Match when={part.type === "tool" && part}>{(part) => <ToolPart part={part()} />}</Match>
+            </Switch>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }

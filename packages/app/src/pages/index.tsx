@@ -1,10 +1,8 @@
 import { FileIcon, Icon, IconButton, Tooltip } from "@/ui"
 import { Tabs } from "@/ui/tabs"
 import FileTree from "@/components/file-tree"
-import type { FileContent, FileNode } from "@opencode-ai/sdk"
 import { createSignal, For, onCleanup, onMount } from "solid-js"
-import { createStore } from "solid-js/store"
-import { useApi } from "@/providers"
+import { useLocal, useSDK } from "@/context"
 import { Code } from "@/components/code"
 import { getFileExtension } from "@/utils"
 import {
@@ -17,27 +15,17 @@ import {
   useDragDropContext,
 } from "@thisbeyond/solid-dnd"
 import type { DragEvent, Transformer } from "@thisbeyond/solid-dnd"
-
-type TextSelection = { startLine: number; startChar: number; endLine: number; endChar: number }
-type FileNodeWithContent = FileNode & {
-  content?: FileContent
-  preview: boolean
-  selection?: TextSelection
-  scrollTop?: number
-}
+import type { LocalFile, TextSelection } from "@/context/local"
 
 export default function Page() {
-  const api = useApi()
-  const [selected, setSelected] = createSignal<FileNode>()
-  const [selectedTab, setSelectedTab] = createSignal<string>()
-  const [state, setState] = createStore({
-    files: [] as FileNodeWithContent[],
-  })
+  const sdk = useSDK()
+  const local = useLocal()
   const [clickTimer, setClickTimer] = createSignal<number | undefined>()
   const [activeItem, setActiveItem] = createSignal<string | undefined>(undefined)
   const [inputValue, setInputValue] = createSignal("")
-  let inputRef: HTMLInputElement | undefined = undefined
   const [isSelecting, setIsSelecting] = createSignal(false)
+
+  let inputRef: HTMLInputElement | undefined = undefined
 
   const MOD = typeof navigator === "object" && /(Mac|iPod|iPhone|iPad)/.test(navigator.platform) ? "Meta" : "Control"
 
@@ -79,10 +67,12 @@ export default function Page() {
     if (!isSelecting()) return
     setIsSelecting(false)
 
-    const selection = window.getSelection()
-    if (!selection || selection.rangeCount === 0) return
+    if (!local.file.active()) return
 
-    const range = selection.getRangeAt(0)
+    const wselection = window.getSelection()
+    if (!wselection || wselection.rangeCount === 0) return
+
+    const range = wselection.getRangeAt(0)
     const startContainer = range.startContainer
     const endContainer = range.endContainer
 
@@ -105,16 +95,13 @@ export default function Page() {
     const endLineIndex = allLines.indexOf(endLineElement)
     if (startLineIndex === -1 || endLineIndex === -1) return
 
-    const filePath = startRoot.getAttribute("data-source-file") || selectedTab()
+    const filePath = startRoot.getAttribute("data-source-file") || local.file.active()!.path
     const startLine = startLineIndex + 1
     const endLine = endLineIndex + 1
     const startChar = getCharacterOffsetInLine(startLineElement, startContainer, range.startOffset)
     const endChar = getCharacterOffsetInLine(endLineElement, endContainer, range.endOffset)
 
-    const idx = state.files.findIndex((f) => f.path === filePath)
-    if (idx === -1) return
-
-    const prev = state.files[idx]?.selection
+    const prev = local.file.node(filePath).selection
     if (
       prev &&
       prev.startLine === startLine &&
@@ -122,24 +109,26 @@ export default function Page() {
       prev.startChar === startChar &&
       prev.endChar === endChar
     ) {
-      selection.removeAllRanges()
+      wselection.removeAllRanges()
       return
     }
 
-    setState("files", idx, "selection", { startLine, startChar, endLine, endChar })
-    applySelectionToCode(state.files[idx], codeContainer)
-    selection.removeAllRanges()
+    const selection = { startLine, startChar, endLine, endChar }
+    local.file.select(filePath, selection)
+    applySelectionToCode(codeContainer, selection)
+    wselection.removeAllRanges()
   }
 
   function selectAllInActiveCode() {
-    const filePath = selectedTab()
-    if (!filePath) return
-    const root = document.querySelector(`[data-source-file="${filePath}"]`) as HTMLElement | null
-    if (!root) return
-    const codeEl = root.querySelector("code") as HTMLElement | null
-    if (!codeEl) return
+    const active = local.file.active()
+    if (!active) return
 
-    const lines = Array.from(codeEl.querySelectorAll(".line"))
+    const root = document.querySelector(`[data-source-file="${active.path}"]`) as HTMLElement | null
+    if (!root) return
+    const element = root.querySelector("code") as HTMLElement | null
+    if (!element) return
+
+    const lines = Array.from(element.querySelectorAll(".line"))
     if (!lines.length) return
 
     const r = document.createRange()
@@ -147,11 +136,9 @@ export default function Page() {
     r.selectNodeContents(last)
     const lastLen = r.toString().length
 
-    const idx = state.files.findIndex((f) => f.path === filePath)
-    if (idx === -1) return
-
-    setState("files", idx, "selection", { startLine: 1, startChar: 0, endLine: lines.length, endChar: lastLen })
-    applySelectionToCode(state.files[idx], codeEl)
+    const selection = { startLine: 1, startChar: 0, endLine: lines.length, endChar: lastLen }
+    local.file.select(active.path, selection)
+    applySelectionToCode(element, selection)
   }
 
   const getCharacterOffsetInLine = (lineElement: Element, targetNode: Node, offset: number): number => {
@@ -179,7 +166,7 @@ export default function Page() {
     return null
   }
 
-  const applySelectionToCode = (file: FileNodeWithContent, codeEl: HTMLElement) => {
+  const applySelectionToCode = (codeEl: HTMLElement, selection: TextSelection) => {
     const olds = Array.from(codeEl.querySelectorAll('span[data-custom-selection="true"]'))
     if (olds.length) {
       for (const s of olds) {
@@ -195,16 +182,15 @@ export default function Page() {
       }
     }
 
-    const sel = file.selection
-    if (!sel) return
+    if (!selection) return
 
     const lines = Array.from(codeEl.querySelectorAll(".line"))
     if (lines.length === 0) return
 
-    let sIdx = Math.max(0, sel.startLine - 1)
-    let eIdx = Math.max(0, sel.endLine - 1)
-    let sChar = Math.max(0, sel.startChar || 0)
-    let eChar = Math.max(0, sel.endChar || 0)
+    let sIdx = Math.max(0, selection.startLine - 1)
+    let eIdx = Math.max(0, selection.endLine - 1)
+    let sChar = Math.max(0, selection.startChar || 0)
+    let eChar = Math.max(0, selection.endChar || 0)
 
     if (sIdx > eIdx || (sIdx === eIdx && sChar > eChar)) {
       const ti = sIdx
@@ -245,22 +231,19 @@ export default function Page() {
     }
   }
 
-  const handleCodeReady = (file: FileNodeWithContent, el: HTMLElement) => {
-    if (selectedTab() !== file.path) return
-    applySelectionToCode(file, el)
+  const handleCodeReady = (file: LocalFile, element: HTMLElement) => {
+    if (local.file.active()?.path !== file.path) return
+    applySelectionToCode(element, file.selection)
 
-    const parent = el.closest("[data-source-file]") as HTMLElement | null
+    const parent = element.closest("[data-source-file]") as HTMLElement | null
     if (parent && file.scrollTop !== undefined) {
       parent.scrollTop = file.scrollTop
     }
   }
 
-  const handleCodeScrollEnd = (file: FileNodeWithContent, el: HTMLElement) => {
-    if (selectedTab() !== file.path) return
-    const idx = state.files.findIndex((f) => f.path === file.path)
-    if (idx !== -1) {
-      setState("files", idx, "scrollTop", el.scrollTop)
-    }
+  const handleCodeScrollEnd = (file: LocalFile, element: HTMLElement) => {
+    if (local.file.active()?.path !== file.path) return
+    local.file.scroll(file.path, element.scrollTop)
   }
 
   const openFileAndSelectLines = async (pathWithLines: string) => {
@@ -272,27 +255,20 @@ export default function Page() {
     }
 
     const [, filePath, startLine, endLine] = match
-    const node = state.files.find((f) => f.path === filePath) ?? {
-      path: filePath,
-      absolute: filePath,
-      name: filePath.split("/").pop() || filePath,
-      type: "file",
-      ignored: false,
-    }
-    await openFile(node)
-    const index = state.files.findIndex((f) => f.path === filePath)
-    setState("files", index, "selection", {
+    const selection = {
       startLine: parseInt(startLine, 10),
       startChar: 0,
       endLine: parseInt(endLine, 10) + 1,
       endChar: 0,
-    })
+    }
+    local.file.open(filePath)
+    local.file.select(filePath, selection)
 
     const root = document.querySelector(`[data-source-file="${filePath}"]`) as HTMLElement | null
     if (!root) return
-    const codeEl = root.querySelector("code") as HTMLElement | null
-    if (!codeEl) return
-    applySelectionToCode(state.files.find((f) => f.path === filePath)!, codeEl)
+    const element = root.querySelector("code") as HTMLElement | null
+    if (!element) return
+    applySelectionToCode(element, selection)
   }
 
   const resetClickTimer = () => {
@@ -308,54 +284,22 @@ export default function Page() {
     setClickTimer(newClickTimer as unknown as number)
   }
 
-  const openFile = async (node: FileNode) => {
-    if (node.type === "file") {
-      const index = state.files.findIndex((f) => f.path === node.path)
-      if (index === -1) {
-        const content = await api.file.read({ query: { path: node.path } }).then((res) => res.data)
-        setState("files", [...state.files.filter((f) => !f.preview), { ...node, content, preview: true }])
-      }
-      setSelectedTab(node.path)
-    }
-    setSelected(node)
-  }
-
-  const handleFileClick = async (file: FileNode) => {
+  const handleFileClick = async (file: LocalFile) => {
     if (clickTimer()) {
       resetClickTimer()
-      const index = state.files.findIndex((f) => f.path === file.path)
-      setState("files", index, "preview", false)
+      local.file.update(file.path, { ...file, pinned: true })
     } else {
-      await openFile(file)
+      local.file.open(file.path)
       startClickTimer()
     }
   }
 
   const handleTabChange = (path: string) => {
-    setSelectedTab(path)
-    setSelected(state.files.find((f) => f.path === path))
+    local.file.open(path)
   }
 
-  const handleTabClick = (file: FileNodeWithContent) => {
-    if (clickTimer()) {
-      resetClickTimer()
-      if (file.preview) {
-        const index = state.files.findIndex((f) => f.path === selectedTab())
-        setState("files", index, "preview", false)
-      }
-    } else {
-      startClickTimer()
-    }
-  }
-
-  const handleTabClose = (file: FileNode) => {
-    if (selectedTab() === file.path) {
-      const index = state.files.findIndex((f) => f.path === file.path)
-      const previous = Math.max(0, index - 1)
-      setSelectedTab(state.files[previous].path)
-      setSelected(state.files[previous])
-    }
-    setState("files", (files) => files.filter((f) => f.path !== file.path))
+  const handleTabClose = (file: LocalFile) => {
+    local.file.close(file.path)
   }
 
   const onDragStart = (event: any) => {
@@ -365,20 +309,17 @@ export default function Page() {
   const onDragOver = (event: DragEvent) => {
     const { draggable, droppable } = event
     if (draggable && droppable) {
-      const currentFiles = state.files.map((f) => f.path)
+      const currentFiles = local.file.opened().map((f) => f.path)
       const fromIndex = currentFiles.indexOf(draggable.id.toString())
       const toIndex = currentFiles.indexOf(droppable.id.toString())
       if (fromIndex !== toIndex) {
-        const updatedFiles = state.files.slice()
-        updatedFiles.splice(toIndex, 0, ...updatedFiles.splice(fromIndex, 1))
-        setState("files", updatedFiles)
+        local.file.move(draggable.id.toString(), toIndex)
       }
     }
   }
 
   const onDragEnd = () => {
-    const index = state.files.findIndex((f) => f.path === selectedTab())
-    setState("files", index, "preview", false)
+    // local.file.update(activeItem()!, { ...local.file.node(activeItem()!), preview: false })
     setActiveItem(undefined)
   }
 
@@ -387,9 +328,9 @@ export default function Page() {
     const prompt = inputValue()
     setInputValue("")
 
-    const session = await api.session.create()
+    const session = await sdk.session.create()
 
-    const response = await api.session.prompt({
+    const response = await sdk.session.prompt({
       path: { id: session.data!.id },
       body: {
         agent: "build",
@@ -403,7 +344,7 @@ export default function Page() {
             type: "text",
             text: prompt,
           },
-          ...state.files.flatMap((f) => [
+          ...local.file.opened().flatMap((f) => [
             {
               type: "file" as const,
               mime: "text/plain",
@@ -430,7 +371,7 @@ export default function Page() {
   return (
     <div class="relative">
       <div class="fixed top-0 w-50 h-full py-2 border-r border-border-subtle/30 overflow-y-auto no-scrollbar">
-        <FileTree path="/" selected={selected()} onFileClick={handleFileClick} />
+        <FileTree path="" onFileClick={handleFileClick} />
       </div>
       <div
         class="fixed top-0 left-px w-[198px] h-4 pointer-events-none 
@@ -449,15 +390,19 @@ export default function Page() {
         >
           <DragDropSensors />
           <ConstrainDragYAxis />
-          <Tabs class="relative grow w-full flex flex-col h-screen" value={selectedTab()} onChange={handleTabChange}>
+          <Tabs
+            class="relative grow w-full flex flex-col h-screen"
+            value={local.file.active()?.path}
+            onChange={handleTabChange}
+          >
             <Tabs.List class="sticky top-0 shrink-0">
-              <SortableProvider ids={state.files.map((f) => f.path)}>
-                <For each={state.files}>
-                  {(file) => <SortableTab file={file} onTabClick={handleTabClick} onTabClose={handleTabClose} />}
+              <SortableProvider ids={local.file.opened().map((f) => f.path)}>
+                <For each={local.file.opened()}>
+                  {(file) => <SortableTab file={file} onTabClick={handleFileClick} onTabClose={handleTabClose} />}
                 </For>
               </SortableProvider>
             </Tabs.List>
-            <For each={state.files}>
+            <For each={local.file.opened()}>
               {(file) => (
                 <Tabs.Content value={file.path} class="grow h-full pt-1 select-text">
                   <Code
@@ -474,7 +419,7 @@ export default function Page() {
           <DragOverlay>
             {activeItem() &&
               (() => {
-                const draggedFile = state.files.find((f) => f.path === activeItem())!
+                const draggedFile = local.file.node(activeItem()!)
                 return (
                   <div
                     class="relative px-3 h-9 flex items-center 
@@ -507,17 +452,17 @@ export default function Page() {
   )
 }
 
-const TabVisual = (props: { file: FileNodeWithContent }) => (
+const TabVisual = (props: { file: LocalFile }) => (
   <div class="flex items-center gap-x-1.5">
     <FileIcon node={props.file} class="" />
-    <span classList={{ "text-xs": true, italic: props.file.preview }}>{props.file.name}</span>
+    <span classList={{ "text-xs": true, italic: !props.file.pinned }}>{props.file.name}</span>
   </div>
 )
 
 const SortableTab = (props: {
-  file: FileNodeWithContent
-  onTabClick: (file: FileNodeWithContent) => void
-  onTabClose: (file: FileNode) => void
+  file: LocalFile
+  onTabClick: (file: LocalFile) => void
+  onTabClose: (file: LocalFile) => void
 }) => {
   const sortable = createSortable(props.file.path)
 

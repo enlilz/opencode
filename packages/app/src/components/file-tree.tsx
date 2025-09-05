@@ -1,55 +1,29 @@
-import { useApi } from "@/providers"
+import { useLocal } from "@/context"
+import type { LocalFile } from "@/context/local"
 import { Collapsible, FileIcon, Tooltip } from "@/ui"
-import type { FileNode } from "@opencode-ai/sdk"
-import { useQuery } from "@tanstack/solid-query"
-import { For, Match, Switch, type ParentProps } from "solid-js"
-import { createStore } from "solid-js/store"
+import { For, Match, Switch, type ComponentProps, type ParentProps } from "solid-js"
+import { Dynamic } from "solid-js/web"
 
 export default function FileTree(props: {
   path: string
   class?: string
   nodeClass?: string
   level?: number
-  selected?: FileNode
-  onFileClick?: (file: FileNode) => void
+  onFileClick?: (file: LocalFile) => void
 }) {
-  const api = useApi()
-  const files = useQuery(() => ({
-    queryKey: ["files", props.path],
-    queryFn: () => api.file.list({ query: { path: props.path } }).then((res) => res.data),
-  }))
-  const [open, setOpen] = createStore<string[]>([])
+  const local = useLocal()
   const level = props.level ?? 0
 
-  const updateOpenDirectories = (value: boolean, path: string) => {
-    if (value) {
-      setOpen((open) => {
-        if (open.includes(path)) return open
-        return [...open, path]
-      })
-    } else {
-      setOpen((open) => {
-        if (!open.includes(path)) return open
-        return open.filter((p) => p !== path)
-      })
-    }
-  }
-
-  const handleClick = (node: FileNode) => {
-    if (props.onFileClick) {
-      props.onFileClick(node)
-    }
-  }
-
-  const NodeButton = (p: ParentProps & { node: FileNode }) => (
-    <button
+  const Node = (p: ParentProps & ComponentProps<"div"> & { node: LocalFile; as?: "div" | "button" }) => (
+    <Dynamic
+      component={p.as ?? "div"}
       classList={{
         "p-0.5 w-full flex items-center gap-x-2 hover:bg-background-panel cursor-pointer": true,
-        "bg-background-element": props.selected?.path === p.node.path,
+        "bg-background-element": local.file.active()?.path === p.node.path,
         [props.nodeClass ?? ""]: !!props.nodeClass,
       }}
       style={`padding-left: ${level * 10}px`}
-      onClick={() => handleClick(p.node)}
+      {...p}
     >
       {p.children}
       <span
@@ -57,43 +31,46 @@ export default function FileTree(props: {
           "text-xs whitespace-nowrap truncate": true,
           "text-text-muted/40": p.node.ignored,
           "text-text-muted/80": !p.node.ignored,
-          "!text-text": props.selected?.path === p.node.path,
+          "!text-text": local.file.active()?.path === p.node.path,
         }}
       >
         {p.node.name}
       </span>
-    </button>
+    </Dynamic>
   )
 
   return (
     <div class={`flex flex-col ${props.class}`}>
-      <For each={files.data}>
+      <For each={local.file.children(props.path)}>
         {(node) => (
           <Tooltip forceMount={false} openDelay={2000} value={node.path} placement="right">
             <Switch>
               <Match when={node.type === "directory"}>
-                <Collapsible forceMount={false} onOpenChange={(open) => updateOpenDirectories(open, node.path)}>
+                <Collapsible
+                  forceMount={false}
+                  open={local.file.node(node.path)?.expanded}
+                  onOpenChange={(open) => (open ? local.file.expand(node.path) : local.file.collapse(node.path))}
+                >
                   <Collapsible.Trigger>
-                    <NodeButton node={node}>
+                    <Node node={node}>
                       <Collapsible.Arrow size={16} class="text-text-muted/60 ml-1" />
-                      <FileIcon node={node} expanded={open.includes(node.path)} class="text-text-muted/60 -ml-1" />
-                    </NodeButton>
+                      <FileIcon
+                        node={node}
+                        expanded={local.file.node(node.path).expanded}
+                        class="text-text-muted/60 -ml-1"
+                      />
+                    </Node>
                   </Collapsible.Trigger>
                   <Collapsible.Content>
-                    <FileTree
-                      path={node.path}
-                      level={level + 1}
-                      selected={props.selected}
-                      onFileClick={props.onFileClick}
-                    />
+                    <FileTree path={node.path} level={level + 1} onFileClick={props.onFileClick} />
                   </Collapsible.Content>
                 </Collapsible>
               </Match>
               <Match when={node.type === "file"}>
-                <NodeButton node={node}>
+                <Node node={node} as="button" onClick={() => props.onFileClick?.(node)}>
                   <div class="w-4 shrink-0" />
                   <FileIcon node={node} class="text-primary" />
-                </NodeButton>
+                </Node>
               </Match>
             </Switch>
           </Tooltip>
