@@ -5,7 +5,7 @@ import "@/index.css"
 import Layout from "@/pages/layout"
 import Home from "@/pages"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
-import { ApiProvider, ProjectProvider, ThemeProvider } from "@/providers"
+import { ApiProvider, ThemeProvider } from "@/providers"
 
 const queryClient = new QueryClient()
 const root = document.getElementById("root")
@@ -22,11 +22,9 @@ render(
       <ThemeProvider defaultTheme="opencode" defaultDarkMode={true}>
         <ApiProvider>
           <QueryClientProvider client={queryClient}>
-            <ProjectProvider>
-              <Router root={Layout}>
-                <Route path="/" component={Home} />
-              </Router>
-            </ProjectProvider>
+            <Router root={Layout}>
+              <Route path="/" component={Home} />
+            </Router>
           </QueryClientProvider>
         </ApiProvider>
       </ThemeProvider>

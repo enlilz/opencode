@@ -1,16 +1,21 @@
 import { transformerNotationDiff } from "@shikijs/transformers"
 import { bundledLanguages, codeToHtml } from "shiki"
-import { createResource, Suspense } from "solid-js"
+import { createResource, splitProps, Suspense, type ComponentProps, createEffect, createSignal } from "solid-js"
 
-interface Props {
+interface Props extends ComponentProps<"div"> {
   code: string
   lang?: string
   flush?: boolean
+  onReady?: (el: HTMLElement) => void
 }
 
 export function Code(props: Props) {
+  const [local, others] = splitProps(props, ["class", "classList", "lang", "code", "flush", "onReady"])
+  const [initialized, setInitialized] = createSignal(false)
+  let container: HTMLDivElement | undefined
+
   const [html] = createResource(
-    () => [props.code, props.lang],
+    () => [local.code, local.lang],
     async ([code, lang]) => {
       return (await codeToHtml(code || "", {
         lang: lang && lang in bundledLanguages ? lang : "text",
@@ -576,30 +581,63 @@ export function Code(props: Props) {
           ],
           type: "dark",
         },
-        transformers: [transformerNotationDiff()],
+        transformers: [transformerNotationDiff()], //, transformerRenderWhitespace()],
       })) as string
     },
   )
+
+  createEffect(() => {
+    const content = html()
+    if (!container || !content || initialized()) return
+    const code = container.querySelector("code") as HTMLElement | null
+    if (code) {
+      local.onReady?.(code)
+      setInitialized(true)
+    }
+  })
+
   return (
     <Suspense>
       <div
+        ref={(el) => (container = el)}
         innerHTML={html()}
+        class="
+          font-mono text-xs tracking-wide overflow-y-auto no-scrollbar h-full
+          [&]:[counter-reset:line]
+          [&_pre]:focus-visible:outline-none
+          [&_pre]:overflow-x-auto [&_pre]:no-scrollbar
+          [&_code]:min-w-full [&_code]:inline-block
+          [&_[data-custom-selection='true']]:relative
+          [&_[data-custom-selection='true']]:bg-primary/33
+          [&_[data-custom-selection='true']]:py-px
+          [&_[data-custom-selection='true']_.space::before]:opacity-25
+          [&_[data-custom-selection='true']_.tab::before]:opacity-25
+          [&_.tab]:relative
+          [&_.tab::before]:content['⇥']
+          [&_.tab::before]:absolute
+          [&_.tab::before]:opacity-0
+          [&_.space]:relative
+          [&_.space::before]:content-['·']
+          [&_.space::before]:absolute
+          [&_.space::before]:opacity-0
+          [&_.line]:inline-block [&_.line]:w-full
+          [&_.line]:hover:bg-background-element
+          [&_.line::before]:sticky [&_.line::before]:left-0
+          [&_.line::before]:w-12 [&_.line::before]:pr-4
+          [&_.line::before]:z-10
+          [&_.line::before]:bg-background-panel
+          [&_.line::before]:text-text-muted/60
+          [&_.line::before]:text-right [&_.line::before]:inline-block
+          [&_.line::before]:select-none
+          [&_.line::before]:[counter-increment:line]
+          [&_.line::before]:content-[counter(line)]
+         "
         classList={{
-          "font-mono text-xs tracking-wide": true,
-          "[&]:[counter-reset:line]": true,
-          "[&_.line]:inline-block": true,
-          "[&_.line]:w-full": true,
-          "[&_.line]:hover:bg-background-element": true,
-          "[&_.line::before]:select-none": true,
-          "[&_.line::before]:w-12": true,
-          "[&_.line::before]:pr-4": true,
-          "[&_.line::before]:text-right": true,
-          "[&_.line::before]:inline-block": true,
-          "[&_.line::before]:text-text-muted/60": true,
-          "[&_.line::before]:[counter-increment:line]": true,
-          "[&_.line::before]:content-[counter(line)]": true,
+          ...(local.classList || {}),
+          [local.class ?? ""]: !!local.class,
         }}
-        data-flush={props.flush === true ? true : undefined}
+        data-flush={local.flush === true ? true : undefined}
+        {...others}
       />
     </Suspense>
   )

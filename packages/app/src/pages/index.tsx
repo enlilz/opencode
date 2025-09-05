@@ -1,8 +1,8 @@
 import { FileIcon, Icon, IconButton, Tooltip } from "@/ui"
 import { Tabs } from "@/ui/tabs"
 import FileTree from "@/components/file-tree"
-import type { FileNode } from "@opencode-ai/sdk"
-import { createSignal, For } from "solid-js"
+import type { FileContent, FileNode } from "@opencode-ai/sdk"
+import { createSignal, For, onCleanup, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useApi } from "@/providers"
 import { Code } from "@/components/code"
@@ -18,7 +18,13 @@ import {
 } from "@thisbeyond/solid-dnd"
 import type { DragEvent, Transformer } from "@thisbeyond/solid-dnd"
 
-type FileNodeWithContent = FileNode & { content?: string; preview: boolean }
+type TextSelection = { startLine: number; startChar: number; endLine: number; endChar: number }
+type FileNodeWithContent = FileNode & {
+  content?: FileContent
+  preview: boolean
+  selection?: TextSelection
+  scrollTop?: number
+}
 
 export default function Page() {
   const api = useApi()
@@ -29,6 +35,265 @@ export default function Page() {
   })
   const [clickTimer, setClickTimer] = createSignal<number | undefined>()
   const [activeItem, setActiveItem] = createSignal<string | undefined>(undefined)
+  const [inputValue, setInputValue] = createSignal("")
+  let inputRef: HTMLInputElement | undefined = undefined
+  const [isSelecting, setIsSelecting] = createSignal(false)
+
+  const MOD = typeof navigator === "object" && /(Mac|iPod|iPhone|iPad)/.test(navigator.platform) ? "Meta" : "Control"
+
+  onMount(() => {
+    document.addEventListener("keydown", handleKeyDown)
+    document.addEventListener("mousedown", handleMouseDown)
+    document.addEventListener("mouseup", handleMouseUp)
+    // Expose function globally for debugging/testing
+    ;(window as any).openFileAndSelectLines = openFileAndSelectLines
+  })
+
+  onCleanup(() => {
+    document.removeEventListener("keydown", handleKeyDown)
+    document.removeEventListener("mousedown", handleMouseDown)
+    document.removeEventListener("mouseup", handleMouseUp)
+  })
+
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (document.activeElement === inputRef) return
+
+    if ((e.key === "a" || e.key === "A") && e.getModifierState(MOD)) {
+      e.preventDefault()
+      selectAllInActiveCode()
+      return
+    }
+
+    if (e.key.length === 1 && e.key !== "Unidentified") {
+      inputRef?.focus()
+    }
+  }
+
+  const handleMouseDown = (e: MouseEvent) => {
+    const t = e.target as Element | null
+    if (!t) return
+    setIsSelecting(true)
+  }
+
+  const handleMouseUp = () => {
+    if (!isSelecting()) return
+    setIsSelecting(false)
+
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount === 0) return
+
+    const range = selection.getRangeAt(0)
+    const startContainer = range.startContainer
+    const endContainer = range.endContainer
+
+    const getLineElement = (n: Node) =>
+      (n.nodeType === Node.TEXT_NODE ? (n.parentElement as Element) : (n as Element))?.closest(".line")
+
+    const startLineElement = getLineElement(startContainer)
+    const endLineElement = getLineElement(endContainer)
+    if (!startLineElement || !endLineElement) return
+
+    const startRoot = startLineElement.closest("[data-source-file]") as HTMLElement | null
+    const endRoot = endLineElement.closest("[data-source-file]") as HTMLElement | null
+    if (!startRoot || startRoot !== endRoot) return
+
+    const codeContainer = startRoot.querySelector("code") as HTMLElement | null
+    if (!codeContainer) return
+
+    const allLines = Array.from(codeContainer.querySelectorAll(".line"))
+    const startLineIndex = allLines.indexOf(startLineElement)
+    const endLineIndex = allLines.indexOf(endLineElement)
+    if (startLineIndex === -1 || endLineIndex === -1) return
+
+    const filePath = startRoot.getAttribute("data-source-file") || selectedTab()
+    const startLine = startLineIndex + 1
+    const endLine = endLineIndex + 1
+    const startChar = getCharacterOffsetInLine(startLineElement, startContainer, range.startOffset)
+    const endChar = getCharacterOffsetInLine(endLineElement, endContainer, range.endOffset)
+
+    const idx = state.files.findIndex((f) => f.path === filePath)
+    if (idx === -1) return
+
+    const prev = state.files[idx]?.selection
+    if (
+      prev &&
+      prev.startLine === startLine &&
+      prev.endLine === endLine &&
+      prev.startChar === startChar &&
+      prev.endChar === endChar
+    ) {
+      selection.removeAllRanges()
+      return
+    }
+
+    setState("files", idx, "selection", { startLine, startChar, endLine, endChar })
+    applySelectionToCode(state.files[idx], codeContainer)
+    selection.removeAllRanges()
+  }
+
+  function selectAllInActiveCode() {
+    const filePath = selectedTab()
+    if (!filePath) return
+    const root = document.querySelector(`[data-source-file="${filePath}"]`) as HTMLElement | null
+    if (!root) return
+    const codeEl = root.querySelector("code") as HTMLElement | null
+    if (!codeEl) return
+
+    const lines = Array.from(codeEl.querySelectorAll(".line"))
+    if (!lines.length) return
+
+    const r = document.createRange()
+    const last = lines[lines.length - 1]
+    r.selectNodeContents(last)
+    const lastLen = r.toString().length
+
+    const idx = state.files.findIndex((f) => f.path === filePath)
+    if (idx === -1) return
+
+    setState("files", idx, "selection", { startLine: 1, startChar: 0, endLine: lines.length, endChar: lastLen })
+    applySelectionToCode(state.files[idx], codeEl)
+  }
+
+  const getCharacterOffsetInLine = (lineElement: Element, targetNode: Node, offset: number): number => {
+    const r = document.createRange()
+    r.selectNodeContents(lineElement)
+    r.setEnd(targetNode, offset)
+    return r.toString().length
+  }
+
+  const getNodeOffsetInLine = (lineElement: Element, charIndex: number): { node: Node; offset: number } | null => {
+    const walker = document.createTreeWalker(lineElement, NodeFilter.SHOW_TEXT, null)
+    let remaining = Math.max(0, charIndex)
+    let lastText: Node | null = null
+    let lastLen = 0
+    let node: Node | null
+    while ((node = walker.nextNode())) {
+      const len = node.textContent?.length || 0
+      lastText = node
+      lastLen = len
+      if (remaining <= len) return { node, offset: remaining }
+      remaining -= len
+    }
+    if (lastText) return { node: lastText, offset: lastLen }
+    if (lineElement.firstChild) return { node: lineElement.firstChild, offset: 0 }
+    return null
+  }
+
+  const applySelectionToCode = (file: FileNodeWithContent, codeEl: HTMLElement) => {
+    const olds = Array.from(codeEl.querySelectorAll('span[data-custom-selection="true"]'))
+    if (olds.length) {
+      for (const s of olds) {
+        const p = s.parentNode
+        if (!p) continue
+        while (s.firstChild) p.insertBefore(s.firstChild, s)
+        p.removeChild(s)
+      }
+      codeEl.normalize()
+      const emptySpaces = Array.from(codeEl.querySelectorAll(".space")).filter((s) => s.textContent === "")
+      for (const s of emptySpaces) {
+        s.remove()
+      }
+    }
+
+    const sel = file.selection
+    if (!sel) return
+
+    const lines = Array.from(codeEl.querySelectorAll(".line"))
+    if (lines.length === 0) return
+
+    let sIdx = Math.max(0, sel.startLine - 1)
+    let eIdx = Math.max(0, sel.endLine - 1)
+    let sChar = Math.max(0, sel.startChar || 0)
+    let eChar = Math.max(0, sel.endChar || 0)
+
+    if (sIdx > eIdx || (sIdx === eIdx && sChar > eChar)) {
+      const ti = sIdx
+      sIdx = eIdx
+      eIdx = ti
+      const tc = sChar
+      sChar = eChar
+      eChar = tc
+    }
+
+    if (eChar === 0 && eIdx > sIdx) {
+      eIdx = eIdx - 1
+      eChar = Number.POSITIVE_INFINITY
+    }
+
+    if (sIdx >= lines.length) return
+    if (eIdx >= lines.length) eIdx = lines.length - 1
+
+    for (let i = sIdx; i <= eIdx; i++) {
+      const lineEl = lines[i]
+      const startInLine = i === sIdx ? sChar : 0
+      const endInLine = i === eIdx ? eChar : Number.POSITIVE_INFINITY
+
+      const s = getNodeOffsetInLine(lineEl, startInLine) ?? { node: lineEl, offset: 0 }
+      const e = getNodeOffsetInLine(lineEl, endInLine) ?? { node: lineEl, offset: lineEl.childNodes.length }
+
+      const r = document.createRange()
+      r.setStart(s.node, s.offset)
+      r.setEnd(e.node, e.offset)
+      if (r.collapsed) continue
+
+      const span = document.createElement("span")
+      span.setAttribute("data-custom-selection", "true")
+
+      const frag = r.extractContents()
+      span.appendChild(frag)
+      r.insertNode(span)
+    }
+  }
+
+  const handleCodeReady = (file: FileNodeWithContent, el: HTMLElement) => {
+    if (selectedTab() !== file.path) return
+    applySelectionToCode(file, el)
+
+    const parent = el.closest("[data-source-file]") as HTMLElement | null
+    if (parent && file.scrollTop !== undefined) {
+      parent.scrollTop = file.scrollTop
+    }
+  }
+
+  const handleCodeScrollEnd = (file: FileNodeWithContent, el: HTMLElement) => {
+    if (selectedTab() !== file.path) return
+    const idx = state.files.findIndex((f) => f.path === file.path)
+    if (idx !== -1) {
+      setState("files", idx, "scrollTop", el.scrollTop)
+    }
+  }
+
+  const openFileAndSelectLines = async (pathWithLines: string) => {
+    // Parse format like "src/file.tsx:L10-32"
+    const match = pathWithLines.match(/^(.+):L(\d+)-(\d+)$/)
+    if (!match) {
+      console.error(`Invalid format: ${pathWithLines}. Expected format: <path>:L<start>-<end>`)
+      return
+    }
+
+    const [, filePath, startLine, endLine] = match
+    const node = state.files.find((f) => f.path === filePath) ?? {
+      path: filePath,
+      absolute: filePath,
+      name: filePath.split("/").pop() || filePath,
+      type: "file",
+      ignored: false,
+    }
+    await openFile(node)
+    const index = state.files.findIndex((f) => f.path === filePath)
+    setState("files", index, "selection", {
+      startLine: parseInt(startLine, 10),
+      startChar: 0,
+      endLine: parseInt(endLine, 10) + 1,
+      endChar: 0,
+    })
+
+    const root = document.querySelector(`[data-source-file="${filePath}"]`) as HTMLElement | null
+    if (!root) return
+    const codeEl = root.querySelector("code") as HTMLElement | null
+    if (!codeEl) return
+    applySelectionToCode(state.files.find((f) => f.path === filePath)!, codeEl)
+  }
 
   const resetClickTimer = () => {
     if (!clickTimer()) return
@@ -43,21 +308,25 @@ export default function Page() {
     setClickTimer(newClickTimer as unknown as number)
   }
 
+  const openFile = async (node: FileNode) => {
+    if (node.type === "file") {
+      const index = state.files.findIndex((f) => f.path === node.path)
+      if (index === -1) {
+        const content = await api.file.read({ query: { path: node.path } }).then((res) => res.data)
+        setState("files", [...state.files.filter((f) => !f.preview), { ...node, content, preview: true }])
+      }
+      setSelectedTab(node.path)
+    }
+    setSelected(node)
+  }
+
   const handleFileClick = async (file: FileNode) => {
     if (clickTimer()) {
       resetClickTimer()
       const index = state.files.findIndex((f) => f.path === file.path)
       setState("files", index, "preview", false)
     } else {
-      if (file.type === "file") {
-        const index = state.files.findIndex((f) => f.path === file.path)
-        if (index === -1) {
-          const content = await api.file.read({ query: { path: file.path } }).then((res) => res.data?.content)
-          setState("files", [...state.files.filter((f) => !f.preview), { ...file, content, preview: true }])
-        }
-        setSelectedTab(file.path)
-      }
-      setSelected(file)
+      await openFile(file)
       startClickTimer()
     }
   }
@@ -108,15 +377,59 @@ export default function Page() {
   }
 
   const onDragEnd = () => {
+    const index = state.files.findIndex((f) => f.path === selectedTab())
+    setState("files", index, "preview", false)
     setActiveItem(undefined)
+  }
+
+  const handleSubmit = async (e: SubmitEvent) => {
+    e.preventDefault()
+    const prompt = inputValue()
+    setInputValue("")
+
+    const session = await api.session.create()
+
+    const response = await api.session.prompt({
+      path: { id: session.data!.id },
+      body: {
+        agent: "build",
+        // model: {
+        //   providerID: "openai",
+        //   modelID: "gpt-3.5-turbo",
+        // },
+        // system: "",
+        parts: [
+          {
+            type: "text",
+            text: prompt,
+          },
+          ...state.files.flatMap((f) => [
+            {
+              type: "file" as const,
+              mime: "text/plain",
+              url: `file://${f.absolute}${f.selection ? `?start=${f.selection.startLine}&end=${f.selection.endLine}` : ""}`,
+              filename: f.name,
+              source: {
+                type: "file" as const,
+                text: {
+                  value: "@" + f.name,
+                  start: 0, // f.start,
+                  end: 0, // f.end,
+                },
+                path: f.absolute,
+              },
+            },
+          ]),
+        ],
+      },
+    })
+
+    console.log("response", response)
   }
 
   return (
     <div class="relative">
-      <div
-        class="fixed top-0 w-50 h-full py-2 overflow-y-auto no-scrollbar 
-               border-r border-border-subtle/30"
-      >
+      <div class="fixed top-0 w-50 h-full py-2 border-r border-border-subtle/30 overflow-y-auto no-scrollbar">
         <FileTree path="/" selected={selected()} onFileClick={handleFileClick} />
       </div>
       <div
@@ -127,7 +440,7 @@ export default function Page() {
         class="fixed bottom-0 left-px w-[198px] h-4 pointer-events-none
                bg-gradient-to-b from-transparent to-background"
       />
-      <div class="pl-50 flex">
+      <div class="pl-50">
         <DragDropProvider
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
@@ -136,11 +449,7 @@ export default function Page() {
         >
           <DragDropSensors />
           <ConstrainDragYAxis />
-          <Tabs
-            class="grow w-full flex flex-col h-screen overflow-x-auto"
-            value={selectedTab()}
-            onChange={handleTabChange}
-          >
+          <Tabs class="relative grow w-full flex flex-col h-screen" value={selectedTab()} onChange={handleTabChange}>
             <Tabs.List class="sticky top-0 shrink-0">
               <SortableProvider ids={state.files.map((f) => f.path)}>
                 <For each={state.files}>
@@ -150,8 +459,14 @@ export default function Page() {
             </Tabs.List>
             <For each={state.files}>
               {(file) => (
-                <Tabs.Content value={file.path} class="grow h-full pt-1">
-                  <Code lang={getFileExtension(file.path)} code={file.content ?? ""} />
+                <Tabs.Content value={file.path} class="grow h-full pt-1 select-text">
+                  <Code
+                    data-source-file={file.path}
+                    lang={getFileExtension(file.path)}
+                    code={file.content?.content ?? ""}
+                    onReady={(el) => handleCodeReady(file, el)}
+                    onScrollEnd={(e) => handleCodeScrollEnd(file, e.currentTarget)}
+                  />
                 </Tabs.Content>
               )}
             </For>
@@ -164,7 +479,7 @@ export default function Page() {
                   <div
                     class="relative px-3 h-9 flex items-center 
                            text-sm font-medium text-text whitespace-nowrap
-                           shrink-0 bg-background-panel shadow-lg
+                           shrink-0 bg-background-panel 
                            border-x border-border-subtle/40 border-b border-b-transparent"
                   >
                     <TabVisual file={draggedFile} />
@@ -173,6 +488,20 @@ export default function Page() {
               })()}
           </DragOverlay>
         </DragDropProvider>
+        <form onSubmit={handleSubmit} class="absolute left-60 right-10 bottom-8 z-50 flex items-center justify-center">
+          <input
+            ref={(el) => (inputRef = el)}
+            type="text"
+            value={inputValue()}
+            onInput={(e) => setInputValue(e.currentTarget.value)}
+            placeholder="Build anything"
+            class="px-5 py-3.5 w-full max-w-2xl min-w-1/2 mx-auto rounded-lg isolate backdrop-blur-xs
+                   bg-gradient-to-b from-background-panel/90 to-background/90
+                   ring-1 ring-border-active/50 border border-transparent
+                   text-text placeholder-text-muted text-sm shadow-[0_0_33px_rgba(0,0,0,0.8)]
+                   focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border focus:border-primary"
+          />
+        </form>
       </div>
     </div>
   )
