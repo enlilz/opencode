@@ -73,60 +73,66 @@ export default function Page() {
     setIsSelecting(true)
   }
 
+  const getSelectionDetails = () => {
+    const s = window.getSelection()
+    if (!s || s.rangeCount === 0) return null
+
+    const r = s.getRangeAt(0)
+    const sc = r.startContainer
+    const ec = r.endContainer
+
+    const getLineElement = (n: Node) =>
+      (n.nodeType === Node.TEXT_NODE ? (n.parentElement as Element) : (n as Element))?.closest(".line")
+
+    const sle = getLineElement(sc)
+    const ele = getLineElement(ec)
+    if (!sle || !ele) return null
+
+    const sr = sle.closest("[data-source-file]") as HTMLElement | null
+    const er = ele.closest("[data-source-file]") as HTMLElement | null
+    if (!sr || sr !== er) return null
+
+    const cc = sr.querySelector("code") as HTMLElement | null
+    if (!cc) return null
+
+    const lines = Array.from(cc.querySelectorAll(".line"))
+    const sli = lines.indexOf(sle)
+    const eli = lines.indexOf(ele)
+    if (sli === -1 || eli === -1) return null
+
+    const fp = sr.getAttribute("data-source-file") || local.file.active()!.path
+    const sl = sli + 1
+    const el = eli + 1
+    const sch = getCharacterOffsetInLine(sle, sc, r.startOffset)
+    const ech = getCharacterOffsetInLine(ele, ec, r.endOffset)
+
+    return { fp, sl, sch, el, ech, cc }
+  }
+
   const handleMouseUp = () => {
     if (!isSelecting()) return
     setIsSelecting(false)
 
     if (!local.file.active()) return
 
-    const wselection = window.getSelection()
-    if (!wselection || wselection.rangeCount === 0) return
-
-    const range = wselection.getRangeAt(0)
-    const startContainer = range.startContainer
-    const endContainer = range.endContainer
-
-    const getLineElement = (n: Node) =>
-      (n.nodeType === Node.TEXT_NODE ? (n.parentElement as Element) : (n as Element))?.closest(".line")
-
-    const startLineElement = getLineElement(startContainer)
-    const endLineElement = getLineElement(endContainer)
-    if (!startLineElement || !endLineElement) return
-
-    const startRoot = startLineElement.closest("[data-source-file]") as HTMLElement | null
-    const endRoot = endLineElement.closest("[data-source-file]") as HTMLElement | null
-    if (!startRoot || startRoot !== endRoot) return
-
-    const codeContainer = startRoot.querySelector("code") as HTMLElement | null
-    if (!codeContainer) return
-
-    const allLines = Array.from(codeContainer.querySelectorAll(".line"))
-    const startLineIndex = allLines.indexOf(startLineElement)
-    const endLineIndex = allLines.indexOf(endLineElement)
-    if (startLineIndex === -1 || endLineIndex === -1) return
-
-    const filePath = startRoot.getAttribute("data-source-file") || local.file.active()!.path
-    const startLine = startLineIndex + 1
-    const endLine = endLineIndex + 1
-    const startChar = getCharacterOffsetInLine(startLineElement, startContainer, range.startOffset)
-    const endChar = getCharacterOffsetInLine(endLineElement, endContainer, range.endOffset)
-
-    const prev = local.file.node(filePath).selection
-    if (
-      prev &&
-      prev.startLine === startLine &&
-      prev.endLine === endLine &&
-      prev.startChar === startChar &&
-      prev.endChar === endChar
-    ) {
-      wselection.removeAllRanges()
+    const d = getSelectionDetails()
+    if (!d) {
+      window.getSelection()?.removeAllRanges()
       return
     }
 
-    const selection = { startLine, startChar, endLine, endChar }
-    local.file.select(filePath, selection)
-    applySelectionToCode(codeContainer, selection)
-    wselection.removeAllRanges()
+    const { fp, sl, sch, el, ech, cc } = d
+
+    const p = local.file.node(fp).selection
+    if (p && p.startLine === sl && p.endLine === el && p.startChar === sch && p.endChar === ech) {
+      window.getSelection()?.removeAllRanges()
+      return
+    }
+
+    const sel = { startLine: sl, startChar: sch, endLine: el, endChar: ech }
+    local.file.select(fp, sel)
+    applySelectionToCode(cc, sel)
+    window.getSelection()?.removeAllRanges()
   }
 
   function selectAllInActiveCode() {
@@ -417,7 +423,7 @@ export default function Page() {
                   <Code
                     data-source-file={file.path}
                     lang={getFileExtension(file.path)}
-                    code={file.content?.content ?? ""}
+                    code={file.content?.diff ?? file.content?.content ?? ""}
                     onReady={(el) => handleCodeReady(file, el)}
                     onScrollEnd={(e) => handleCodeScrollEnd(file, e.currentTarget)}
                   />
