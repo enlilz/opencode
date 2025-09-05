@@ -153,9 +153,6 @@ function init() {
             path,
           ]
         })
-        if (store.active && !store.node[store.active].pinned) {
-          resetNode(store.active)
-        }
         setStore("active", path)
         if (store.node[path].loaded) return
         sdk.file.read({ query: { path } }).then((x) => {

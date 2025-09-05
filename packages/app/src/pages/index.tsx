@@ -1,7 +1,7 @@
 import { FileIcon, Icon, IconButton, Tooltip } from "@/ui"
 import { Tabs } from "@/ui/tabs"
 import FileTree from "@/components/file-tree"
-import { createSignal, For, onCleanup, onMount } from "solid-js"
+import { createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js"
 import { useLocal, useSDK } from "@/context"
 import { Code } from "@/components/code"
 import { getFileExtension } from "@/utils"
@@ -44,12 +44,19 @@ export default function Page() {
   })
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    if (document.activeElement === inputRef) return
-
-    if ((e.key === "a" || e.key === "A") && e.getModifierState(MOD)) {
-      e.preventDefault()
-      selectAllInActiveCode()
+    if (document.activeElement === inputRef) {
+      if (e.key === "Escape") {
+        inputRef?.blur()
+      }
       return
+    }
+
+    if (local.file.active()) {
+      if ((e.key === "a" || e.key === "A") && e.getModifierState(MOD)) {
+        e.preventDefault()
+        selectAllInActiveCode()
+        return
+      }
     }
 
     if (e.key.length === 1 && e.key !== "Unidentified") {
@@ -433,20 +440,55 @@ export default function Page() {
               })()}
           </DragOverlay>
         </DragDropProvider>
-        <form onSubmit={handleSubmit} class="absolute left-60 right-10 bottom-8 z-50 flex items-center justify-center">
-          <input
-            ref={(el) => (inputRef = el)}
-            type="text"
-            value={inputValue()}
-            onInput={(e) => setInputValue(e.currentTarget.value)}
-            placeholder="Build anything"
-            class="px-5 py-3.5 w-full max-w-2xl min-w-1/2 mx-auto rounded-lg isolate backdrop-blur-xs
+        <form
+          onSubmit={handleSubmit}
+          class="peer/editor absolute left-60 right-10 bottom-8 z-50 flex items-center justify-center"
+        >
+          <div
+            class="w-full max-w-2xl min-w-1/2 p-2 mx-auto rounded-lg isolate backdrop-blur-xs
+                   flex flex-col gap-1
                    bg-gradient-to-b from-background-panel/90 to-background/90
                    ring-1 ring-border-active/50 border border-transparent
-                   text-text placeholder-text-muted text-sm shadow-[0_0_33px_rgba(0,0,0,0.8)]
-                   focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border focus:border-primary"
-          />
+                   shadow-[0_0_33px_rgba(0,0,0,0.8)]
+                   focus-within:ring-2 focus-within:ring-primary/40 focus-within:border-primary"
+          >
+            <div class="flex flex-wrap gap-1">
+              <Show when={local.file.active()}>
+                <FileTag
+                  default
+                  file={local.file.active()!}
+                  onClose={() => local.file.close(local.file.active()?.path ?? "")}
+                />
+              </Show>
+              <For each={local.file.opened().filter((x) => x.selection)}>
+                {(file) => <FileTag file={file} onClose={() => local.file.select(file.path, undefined)} />}
+              </For>
+            </div>
+            <input
+              ref={(el) => (inputRef = el)}
+              type="text"
+              value={inputValue()}
+              onInput={(e) => setInputValue(e.currentTarget.value)}
+              placeholder="It all starts with a prompt"
+              class="w-full p-1 pb-4 text-text placeholder-text-muted/80 text-sm focus:outline-none"
+            />
+            <div class="px-1 flex justify-between items-center text-xs text-text-muted">
+              <span>
+                <span class="text-primary uppercase">{local.agent.current()?.name ?? "unknown"}</span> /{" "}
+                {local.model.parsed().provider} / {local.model.parsed().model}
+              </span>
+              <div class="flex gap-1 items-center">
+                <IconButton class="text-text-muted" size="xs" variant="ghost">
+                  <Icon name="photo" size={16} />
+                </IconButton>
+                <IconButton class="text-background-panel! bg-primary rounded-full!" size="xs" variant="ghost">
+                  <Icon name="arrow-up" size={14} />
+                </IconButton>
+              </div>
+            </div>
+          </div>
         </form>
+        <div class="hidden peer-focus-within/editor:block z-20 fixed inset-0 bg-background/60 _backdrop-blur-xs isolate pointer-events-none" />
       </div>
     </div>
   )
@@ -475,13 +517,10 @@ const SortableTab = (props: {
             <TabVisual file={props.file} />
           </Tabs.Trigger>
           <IconButton
-            classList={{
-              "absolute right-1 top-2": true,
-              "opacity-0 text-text-muted/60": true,
-              "peer-data-[selected]/tab:opacity-100 peer-data-[selected]/tab:text-text": true,
-              "peer-data-[selected]/tab:hover:bg-border-subtle": true,
-              "hover:opacity-100 peer-hover/tab:opacity-100": true,
-            }}
+            class="absolute right-1 top-2 opacity-0 text-text-muted/60
+                   peer-data-[selected]/tab:opacity-100 peer-data-[selected]/tab:text-text
+                   peer-data-[selected]/tab:hover:bg-border-subtle
+                   hover:opacity-100 peer-hover/tab:opacity-100"
             size="xs"
             variant="ghost"
             onClick={() => props.onTabClose(props.file)}
@@ -493,6 +532,31 @@ const SortableTab = (props: {
     </div>
   )
 }
+
+const FileTag = (props: { file: LocalFile; default?: boolean; onClose: () => void }) => (
+  <div
+    class="flex items-center bg-background group/tag
+           border border-border-subtle/60 border-dashed
+           rounded-md text-xs text-text-muted"
+  >
+    <IconButton class="text-text-muted" size="xs" variant="ghost" onClick={props.onClose}>
+      <Switch fallback={<FileIcon node={props.file} class="group-hover/tag:hidden size-3!" />}>
+        <Match when={props.default}>
+          <Icon name="file" class="group-hover/tag:hidden" size={12} />
+        </Match>
+      </Switch>
+      <Icon name="close" class="hidden group-hover/tag:block" size={12} />
+    </IconButton>
+    <div class="pr-1 flex gap-1 items-center">
+      <span>{props.file.name}</span>
+      <Show when={!props.default && props.file.selection}>
+        <span class="">
+          ({props.file.selection!.startLine}-{props.file.selection!.endLine})
+        </span>
+      </Show>
+    </div>
+  </div>
+)
 
 const ConstrainDragYAxis = () => {
   const context = useDragDropContext()
