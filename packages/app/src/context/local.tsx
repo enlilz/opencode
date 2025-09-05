@@ -138,34 +138,65 @@ function init() {
       })
     }
 
+    const load = (path: string) => {
+      sdk.file.read({ query: { path } }).then((x) => {
+        setStore(
+          "node",
+          path,
+          produce((draft) => {
+            draft.loaded = true
+            draft.content = x.data
+          }),
+        )
+      })
+    }
+
+    const open = (path: string) => {
+      setStore("opened", (x) => {
+        if (x.includes(path)) return x
+        return [
+          ...opened()
+            .filter((x) => x.pinned)
+            .map((x) => x.path),
+          path,
+        ]
+      })
+      setStore("active", path)
+      if (store.node[path].loaded) return
+      load(path)
+    }
+
+    sdk.event.subscribe().then(async (events) => {
+      for await (const event of events.stream) {
+        switch (event.type) {
+          case "message.part.updated":
+            const part = event.properties.part
+            if (part.type === "tool" && part.state.status === "completed") {
+              switch (part.tool) {
+                case "read":
+                  console.log("read", part.state.input)
+                  break
+                case "edit":
+                  const absolute = part.state.input["filePath"] as string
+                  const path = absolute.replace(sync.data.path.directory + "/", "")
+                  load(path)
+                  break
+                default:
+                  break
+              }
+            }
+            break
+        }
+      }
+    })
+
     return {
       active,
       opened,
       node: (path: string) => store.node[path],
       update: (path: string, node: LocalFile) => setStore("node", path, reconcile(node)),
-      open(path: string) {
-        setStore("opened", (x) => {
-          if (x.includes(path)) return x
-          return [
-            ...opened()
-              .filter((x) => x.pinned)
-              .map((x) => x.path),
-            path,
-          ]
-        })
-        setStore("active", path)
-        if (store.node[path].loaded) return
-        sdk.file.read({ query: { path } }).then((x) => {
-          setStore(
-            "node",
-            path,
-            produce((draft) => {
-              draft.loaded = true
-              draft.content = x.data
-            }),
-          )
-        })
-      },
+      open,
+      load,
       close(path: string) {
         setStore("opened", (opened) => opened.filter((x) => x !== path))
         if (store.active === path) {

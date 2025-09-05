@@ -25,6 +25,9 @@ export default function Page() {
   const [inputValue, setInputValue] = createSignal("")
   const [isSelecting, setIsSelecting] = createSignal(false)
 
+  // TODO: remove
+  local.model.set({ providerID: "opencode", modelID: "grok-code" })
+
   let inputRef: HTMLInputElement | undefined = undefined
 
   const MOD = typeof navigator === "object" && /(Mac|iPod|iPhone|iPad)/.test(navigator.platform) ? "Meta" : "Control"
@@ -334,40 +337,39 @@ export default function Page() {
     e.preventDefault()
     const prompt = inputValue()
     setInputValue("")
+    inputRef?.blur()
 
     const session = await sdk.session.create()
-
     const response = await sdk.session.prompt({
       path: { id: session.data!.id },
       body: {
-        agent: "build",
-        // model: {
-        //   providerID: "openai",
-        //   modelID: "gpt-3.5-turbo",
-        // },
-        // system: "",
+        agent: local.agent.current()!.name,
+        model: local.model.current(),
         parts: [
           {
             type: "text",
             text: prompt,
           },
-          ...local.file.opened().flatMap((f) => [
-            {
-              type: "file" as const,
-              mime: "text/plain",
-              url: `file://${f.absolute}${f.selection ? `?start=${f.selection.startLine}&end=${f.selection.endLine}` : ""}`,
-              filename: f.name,
-              source: {
+          ...local.file
+            .opened()
+            .filter((f) => f.selection || local.file.active()?.path === f.path)
+            .flatMap((f) => [
+              {
                 type: "file" as const,
-                text: {
-                  value: "@" + f.name,
-                  start: 0, // f.start,
-                  end: 0, // f.end,
+                mime: "text/plain",
+                url: `file://${f.absolute}${f.selection ? `?start=${f.selection.startLine}&end=${f.selection.endLine}` : ""}`,
+                filename: f.name,
+                source: {
+                  type: "file" as const,
+                  text: {
+                    value: "@" + f.name,
+                    start: 0, // f.start,
+                    end: 0, // f.end,
+                  },
+                  path: f.absolute,
                 },
-                path: f.absolute,
               },
-            },
-          ]),
+            ]),
         ],
       },
     })
@@ -469,8 +471,8 @@ export default function Page() {
               type="text"
               value={inputValue()}
               onInput={(e) => setInputValue(e.currentTarget.value)}
-              placeholder="It all starts with a prompt"
-              class="w-full p-1 pb-4 text-text placeholder-text-muted/80 text-sm focus:outline-none"
+              placeholder="It all starts with a prompt..."
+              class="w-full p-1 pb-4 text-text font-light placeholder-text-muted/70 text-sm focus:outline-none"
             />
             <div class="px-1 flex justify-between items-center text-xs text-text-muted">
               <span>
@@ -488,7 +490,7 @@ export default function Page() {
             </div>
           </div>
         </form>
-        <div class="hidden peer-focus-within/editor:block z-20 fixed inset-0 bg-background/60 _backdrop-blur-xs isolate pointer-events-none" />
+        <div class="hidden peer-focus-within/editor:block z-30 fixed inset-0 bg-background/80 _backdrop-blur-xs isolate pointer-events-none" />
       </div>
     </div>
   )

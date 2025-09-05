@@ -608,8 +608,8 @@ export function Code(props: Props) {
           [&_pre]:overflow-x-auto [&_pre]:no-scrollbar
           [&_code]:min-w-full [&_code]:inline-block
           [&_[data-custom-selection='true']]:relative
-          [&_[data-custom-selection='true']]:z-30
-          [&_[data-custom-selection='true']]:bg-primary/33
+          [&_[data-custom-selection='true']]:z-40
+          [&_[data-custom-selection='true']]:bg-primary/25
           [&_[data-custom-selection='true']]:py-px
           [&_[data-custom-selection='true']_.space::before]:opacity-25
           [&_[data-custom-selection='true']_.tab::before]:opacity-25
@@ -625,7 +625,7 @@ export function Code(props: Props) {
           [&_.line]:hover:bg-background-element
           [&_.line::before]:sticky [&_.line::before]:left-0
           [&_.line::before]:w-12 [&_.line::before]:pr-4
-          [&_.line::before]:z-40
+          [&_.line::before]:z-10
           [&_.line::before]:bg-background-panel
           [&_.line::before]:text-text-muted/60
           [&_.line::before]:text-right [&_.line::before]:inline-block
