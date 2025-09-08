@@ -100,31 +100,40 @@ export function Prompt(props: PromptProps) {
           >
             <input
               onInput={(value) => {
-                setStore("input", value)
+                const diff = value.length - store.input.length
+                console.log({ diff })
+                setStore(produce((draft) => {
+                  draft.input = value
+                  for (const part of draft.parts) {
+                    if (!part.source) continue
+                    if (part.source.text.start >= input.cursorPosition) {
+                      part.source.text.start += diff
+                      part.source.text.end += diff
+                    }
+                    const sliced = draft.input.slice(part.source.text.start, part.source.text.end)
+                    console.log(sliced)
+                  }
+                }))
                 autocomplete.onInput(value)
               }}
               value={store.input}
               onKeyDown={(e) => {
                 autocomplete.onKeyDown(e)
                 const old = input.cursorPosition
-                const isBackspace = e.name === "backspace"
                 setTimeout(() => {
                   const position = input.cursorPosition
                   const direction = Math.sign(old - position)
                   for (const part of store.parts) {
                     if (part.source && part.source.type === "file") {
-                      console.log({
-                        old,
-                        position,
-                        start: part.source.text.start,
-                        end: part.source.text.end,
-                      })
                       if (
                         position >= part.source.text.start &&
                         position < part.source.text.end
                       ) {
                         if (direction === 1) {
-                          input.cursorPosition = Math.max(0, part.source.text.start - 1)
+                          input.cursorPosition = Math.max(
+                            0,
+                            part.source.text.start - 1,
+                          )
                         }
                         if (direction === -1) {
                           input.cursorPosition = part.source.text.end
